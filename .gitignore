@@ -1,0 +1,7 @@
+magenticenv/
+pycache/
+*.pyc
+.env
+*.db
+.pytest_cache/
+.coveragemagenticvenv/
