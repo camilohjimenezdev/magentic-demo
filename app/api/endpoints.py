@@ -12,7 +12,7 @@ import logging
 from fastapi.security import APIKeyHeader
 from datetime import datetime, timedelta
 from typing import Dict
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,16 @@ def rate_limit(api_key: str = Depends(auth.get_api_key)):
 
 
 class SearchRequest(BaseModel):
-    query: str
-    top_n: int = 5
+    query: str = Field(
+        ..., min_length=1, max_length=1000, description="Search query text"
+    )
+    top_n: int = Field(5, ge=1, le=100, description="Number of results to return")
+
+    @validator("query")
+    def query_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("Query cannot be empty")
+        return v.strip()
 
 
 @router.post("/search/")
@@ -48,45 +56,45 @@ async def search_documents(
     api_key: str = Depends(rate_limit),
     db: Session = Depends(get_db),
 ):
-    query = search_request.query
-    top_n = search_request.top_n
+    """
+    Search for documents using semantic similarity.
+    """
+    try:
+        embedder = PlaceholderEmbedder()
+        query_embedding = embedder.embed_text(search_request.query)
 
-    if len(query) > 1000:
-        raise HTTPException(status_code=400, detail="Query too long")
-    if not (1 <= top_n <= 100):
-        raise HTTPException(status_code=400, detail="Invalid top_n value")
+        chunks = db.query(DocumentChunk).all()
 
-    embedder = PlaceholderEmbedder()
-    query_embedding = embedder.embed_text(query)
+        similarities = []
+        for chunk in chunks:
+            similarity = float(
+                np.dot(query_embedding, chunk.embedding)
+                / (np.linalg.norm(query_embedding) * np.linalg.norm(chunk.embedding))
+            )
+            similarities.append((similarity, chunk))
 
-    chunks = db.query(DocumentChunk).all()
+        top_chunks = sorted(similarities, key=lambda x: x[0], reverse=True)[
+            : search_request.top_n
+        ]
 
-    similarities = []
-    for chunk in chunks:
-        similarity = float(
-            np.dot(query_embedding, chunk.embedding)
-            / (np.linalg.norm(query_embedding) * np.linalg.norm(chunk.embedding))
-        )
-        similarities.append((similarity, chunk))
+        results = []
+        for similarity, chunk in top_chunks:
+            doc = db.query(Document).filter(Document.id == chunk.document_id).first()
+            results.append(
+                {
+                    "document_id": doc.id,
+                    "title": doc.title,
+                    "chunk_content": chunk.content,
+                    "similarity": float(similarity),
+                }
+            )
 
-    top_chunks = sorted(similarities, key=lambda x: x[0], reverse=True)[:top_n]
+        return results
 
-    results = []
-    for similarity, chunk in top_chunks:
-        if not isinstance(chunk.document_id, int) or chunk.document_id < 0:
-            raise HTTPException(status_code=400, detail="Invalid document ID")
-        doc = db.query(Document).filter(Document.id == chunk.document_id).first()
-        results.append(
-            {
-                "document_id": doc.id,
-                "title": doc.title,
-                "chunk_content": chunk.content,
-                "similarity": float(similarity),
-            }
-        )
-
-    db.close()
-    return results
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
 
 
 @router.post("/ingest/{book_id}")
