@@ -5,8 +5,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # PostgreSQL connection string format:
     # postgresql://user:password@host:port/database_name
-    DATABASE_URL: str = "postgresql://postgres:beckham23@localhost:5432/semantic_search"
-    API_SECRET_KEY: str = "your-secret-key"
+    DATABASE_URL: str
+    API_SECRET_KEY: str
     CHUNK_SIZE: int = 1000
     EMBEDDING_DIM: int = 384
 
